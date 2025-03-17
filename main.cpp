@@ -1,4 +1,3 @@
-
 #include <SDL.h>
 #include <iostream>
 
@@ -6,73 +5,73 @@ using namespace std;
 
 const int SCREEN_WIDTH = 1600;
 const int SCREEN_HEIGHT = 900;
+const int EZ_SIZE = 80;
+const int EZ_SPEED = 15;
 
-int main(int argc, char *argv[]){
 
-    //Khoi tao SDL
+SDL_Window* window = NULL;
+SDL_Renderer* renderer = NULL;
+
+bool init(){
     if (SDL_Init(SDL_INIT_VIDEO) < 0){
-        cerr << "Loi! SDL Error: " << SDL_GetError() << "\n";
-        return 1;
+        cerr << "Lỗi! SDL Error: " << SDL_GetError() << "\n";
+        return false;
     }
 
-    //Tao cua so
-    SDL_Window *window = SDL_CreateWindow("DodgeAndQ", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
-
-    if (!window){
-        cerr << "Loi! SDL Error: " << SDL_GetError() << "\n";
-        SDL_Quit();
-        return 1;
+    window = SDL_CreateWindow("DodgeAndQ", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+    if (!window) {
+        cerr << "Lỗi tạo cửa sổ! SDL Error: " << SDL_GetError() << endl;
+        return false;
     }
-
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    renderer = SDL_CreateRenderer(window,-1,SDL_RENDERER_ACCELERATED);
     if (!renderer) {
-        std::cerr << "Không thể tạo renderer! SDL_Error: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+        cerr << "Lỗi tạo renderer! SDL Error: " << SDL_GetError() << endl;
+        return false;
     }
 
-    int r = 0, g = 0, b = 0;
+    return true;
+}
 
-    bool quit = false;
-    SDL_Event e;
-    while(!quit){
-        while(SDL_PollEvent(&e) != 0){
-            if (e.type == SDL_QUIT){
-                quit = true;
-            }
-            else if (e.type == SDL_KEYDOWN){
-                switch(e.key.keysym.sym){
-                    case SDLK_SPACE:
-                        r = rand() % 256;
-                        g = rand() % 256;
-                        b = rand() % 256;
-                        break;
-                }
-
-            }
-            else if (e.type == SDL_MOUSEBUTTONDOWN){
-                switch(e.button.button){
-                    case SDL_BUTTON_LEFT:
-                        r = rand() % 256;
-                        g = rand() % 256;
-                        b = rand() % 256;
-                        break;
-                }
-            }
-
-        }
-
-        SDL_SetRenderDrawColor(renderer, r , g , b , 255);
-        SDL_RenderClear(renderer);
-        SDL_RenderPresent(renderer);
-    }
-
-    //Giai phong tai nguyen
+void close(){
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
+}
 
+int main(int argc, char *argv[]){
+    if (!init()){
+        return 1;
+    }
+
+    bool quit = false;
+    SDL_Event e;
+
+    int x = SCREEN_WIDTH/2 - EZ_SIZE/2;
+    int y = SCREEN_HEIGHT/2 - EZ_SIZE/2;
+
+    while(!quit){
+        while(SDL_PollEvent(&e) != 0){
+            if (e.type == SDL_QUIT) quit = true;
+            else if (e.type == SDL_KEYDOWN){
+                switch(e.key.keysym.sym){
+                    case SDLK_UP: y -= EZ_SPEED; break;
+                    case SDLK_RIGHT: x += EZ_SPEED; break;
+                    case SDLK_LEFT: x -= EZ_SPEED; break;
+                    case SDLK_DOWN: y += EZ_SPEED; break;
+                }
+            }
+        }
+
+        SDL_SetRenderDrawColor(renderer,0,0,0,255);
+        SDL_RenderClear(renderer);
+
+        SDL_Rect rect = {x ,y, EZ_SIZE, EZ_SIZE};
+        SDL_SetRenderDrawColor(renderer, 255,0,0,255);
+        SDL_RenderFillRect(renderer, &rect);
+
+        SDL_RenderPresent(renderer);
+    }
+
+    close();
     return 0;
-
 }

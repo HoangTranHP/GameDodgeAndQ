@@ -1,6 +1,9 @@
 # depslib dependency file v1.0
-1742233404 source:d:\uet\ltnc\sdl\demosdl2\dodgeandq\gamedodgeandq\main.cpp
+1742915456 source:d:\uet\ltnc\sdl\demosdl2\dodgeandq\gamedodgeandq\main.cpp
 	<SDL.h>
 	<iostream>
+	<vector>
 	<cmath>
+	<cstdlib>
+	<algorithm>
 

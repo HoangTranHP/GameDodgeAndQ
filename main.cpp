@@ -6,10 +6,8 @@ using namespace std;
 
 const int SCREEN_WIDTH = 1600;
 const int SCREEN_HEIGHT = 900;
-const int EZ_SIZE = 80;
-const float EZ_SPEED = 500.0f;  // Tốc độ cố định (pixel/giây)
-const int FPS = 60;
-const int frameDelay = 1000 / FPS;
+const int EZ_SIZE = 50;
+const float EZ_SPEED = 300.0f;  // Tốc độ di chuyển (pixel/giây)
 
 SDL_Window* window = NULL;
 SDL_Renderer* renderer = NULL;
@@ -56,54 +54,52 @@ int main(int argc, char* argv[]) {
     int targetX = x, targetY = y;
     bool moving = false;
 
-    Uint32 frameStart;
-    float deltaTime = 0.0f;
+    int lastTick = SDL_GetTicks();
 
     while (!quit) {
-        frameStart = SDL_GetTicks();  // Lưu thời gian bắt đầu khung hình
+        int currentTick = SDL_GetTicks();
+        float deltaTime = (currentTick - lastTick) / 1000.0f;  // Thời gian giữa 2 frame
+        lastTick = currentTick;
 
         while (SDL_PollEvent(&e) != 0) {
             if (e.type == SDL_QUIT) quit = true;
             else if (e.type == SDL_MOUSEBUTTONDOWN) {
-                if (e.button.button == SDL_BUTTON_LEFT) {
+                if (e.button.button == SDL_BUTTON_RIGHT) {  // Click chuột phải
                     SDL_GetMouseState(&targetX, &targetY);
                     moving = true;
                 }
             }
         }
 
-        // Di chuyển dựa trên deltaTime
+        // Nếu đang di chuyển, tiến dần về đích
         if (moving) {
             float dx = targetX - x;
             float dy = targetY - y;
             float distance = sqrt(dx * dx + dy * dy);
 
-            if (distance > 5) {
+            if (distance > 5) {  // Nếu chưa tới đích thì di chuyển
                 x += (dx / distance) * EZ_SPEED * deltaTime;
                 y += (dy / distance) * EZ_SPEED * deltaTime;
             } else {
-                moving = false; // Dừng khi đến gần vị trí click
+                moving = false;  // Đến nơi thì dừng
             }
         }
+
+        // Giữ nhân vật trong màn hình
+        if (x < 0) x = 0;
+        if (x > SCREEN_WIDTH - EZ_SIZE) x = SCREEN_WIDTH - EZ_SIZE;
+        if (y < 0) y = 0;
+        if (y > SCREEN_HEIGHT - EZ_SIZE) y = SCREEN_HEIGHT - EZ_SIZE;
 
         // Vẽ màn hình
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
-        SDL_Rect rect = { (int)x, (int)y, EZ_SIZE, EZ_SIZE };
+        SDL_Rect player = {(int)x, (int)y, EZ_SIZE, EZ_SIZE};
         SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
-        SDL_RenderFillRect(renderer, &rect);
+        SDL_RenderFillRect(renderer, &player);
 
         SDL_RenderPresent(renderer);
-
-        // Điều chỉnh tốc độ khung hình
-        int frameTime = SDL_GetTicks() - frameStart;
-        if (frameDelay > frameTime) {
-            SDL_Delay(frameDelay - frameTime);
-        }
-
-        // Cập nhật deltaTime sau khi điều chỉnh tốc độ
-        deltaTime = (SDL_GetTicks() - frameStart) / 1000.0f;
     }
 
     close();

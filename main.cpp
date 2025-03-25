@@ -19,8 +19,13 @@ const float PROJECTILE_SPEED = 1000.0f;
 const float Q_COOLDOWN = 1.0f;
 const int SCORE_PER_KILL = 10;
 const float COMBO_TIMEOUT = 3.0f;
+const float LEVEL_DURATION = 30.0f;
+const float SPAWN_RATE_BASE = 120.0f;
+const float SPAWN_RATE_DECREASE = 10.0f;
+const float ENEMY_SPEED_INCREASE = 10.0f;
 
 enum EnemyType { BASIC, FAST, CHASER };
+enum WeaponType { SINGLE, SHOTGUN };
 
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
@@ -39,16 +44,40 @@ struct Marker {
     float timer;
 };
 
+struct PowerUp {
+    SDL_FRect rect;
+    enum Type { SPEED_BOOST, DAMAGE_BOOST, SHIELD } type;
+    float timer;
+    bool active;
+};
+
 std::vector<GameObject> enemies;
 std::vector<GameObject> projectiles;
 std::vector<Marker> markers;
+std::vector<PowerUp> powerUps;
 GameObject player;
 int score = 0;
 int combo = 0;
 float comboTime = 0;
 float qCooldown = 0;
 bool qReady = true;
-SDL_FPoint targetPos = {SCREEN_WIDTH/2.0f, SCREEN_HEIGHT/2.0f};
+SDL_FPoint targetPos = {SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f};
+float gameTime = 0.0f;
+int level = 1;
+float spawnRate = SPAWN_RATE_BASE;
+int upgradePoints = 0;
+int projectileDamage = 1;
+float playerSpeed = PLAYER_SPEED;
+float qCooldownMax = Q_COOLDOWN;
+float speedBoostTimer = 0.0f;
+float damageBoostTimer = 0.0f;
+float shieldTimer = 0.0f;
+bool speedBoostActive = false;
+bool damageBoostActive = false;
+bool shieldActive = false;
+int playerHealth = 100;
+const int MAX_HEALTH = 100;
+WeaponType currentWeapon = SINGLE;
 
 bool init() {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -102,30 +131,77 @@ void spawnEnemy() {
     enemies.push_back(enemy);
 }
 
+void spawnPowerUp(float x, float y) {
+    if (rand() % 10 != 0) return;
+    PowerUp pu;
+    pu.rect = {x, y, 20, 20};
+    pu.type = static_cast<PowerUp::Type>(rand() % 3);
+    pu.timer = 10.0f;
+    pu.active = true;
+    powerUps.push_back(pu);
+}
+
 void shootProjectile() {
     if (!qReady) return;
 
     GameObject proj;
     proj.rect.w = PROJECTILE_SIZE;
     proj.rect.h = PROJECTILE_SIZE;
-    proj.rect.x = player.rect.x + player.rect.w/2 - PROJECTILE_SIZE/2;
-    proj.rect.y = player.rect.y + player.rect.h/2 - PROJECTILE_SIZE/2;
+    proj.rect.x = player.rect.x + player.rect.w / 2 - PROJECTILE_SIZE / 2;
+    proj.rect.y = player.rect.y + player.rect.h / 2 - PROJECTILE_SIZE / 2;
 
     int mouseX, mouseY;
     SDL_GetMouseState(&mouseX, &mouseY);
-    float dx = mouseX - proj.rect.x;
-    float dy = mouseY - proj.rect.y;
-    float length = std::sqrt(dx*dx + dy*dy);
+    float dx = mouseX - (proj.rect.x + proj.rect.w / 2);
+    float dy = mouseY - (proj.rect.y + proj.rect.h / 2);
+    float length = std::sqrt(dx * dx + dy * dy);
 
     if (length > 0) {
         proj.vx = (dx / length) * PROJECTILE_SPEED;
         proj.vy = (dy / length) * PROJECTILE_SPEED;
+    } else {
+        proj.vx = 0;
+        proj.vy = PROJECTILE_SPEED; // Mặc định bắn lên nếu không có hướng
     }
 
     proj.active = true;
     projectiles.push_back(proj);
     qReady = false;
-    qCooldown = Q_COOLDOWN;
+    qCooldown = qCooldownMax;
+}
+
+void shootShotgun() {
+    if (!qReady) return;
+
+    int mouseX, mouseY;
+    SDL_GetMouseState(&mouseX, &mouseY);
+    float baseX = player.rect.x + player.rect.w / 2 - PROJECTILE_SIZE / 2;
+    float baseY = player.rect.y + player.rect.h / 2 - PROJECTILE_SIZE / 2;
+    float dx = mouseX - (baseX + PROJECTILE_SIZE / 2);
+    float dy = mouseY - (baseY + PROJECTILE_SIZE / 2);
+    float length = std::sqrt(dx * dx + dy * dy);
+
+    for (int i = -2; i <= 2; i++) {
+        GameObject proj;
+        proj.rect.w = PROJECTILE_SIZE;
+        proj.rect.h = PROJECTILE_SIZE;
+        proj.rect.x = baseX;
+        proj.rect.y = baseY;
+
+        if (length > 0) {
+            float angle = atan2(dy, dx) + i * 0.2f; // Góc lệch cho shotgun
+            proj.vx = cos(angle) * PROJECTILE_SPEED;
+            proj.vy = sin(angle) * PROJECTILE_SPEED;
+        } else {
+            proj.vx = 0;
+            proj.vy = PROJECTILE_SPEED; // Mặc định bắn lên
+        }
+
+        proj.active = true;
+        projectiles.push_back(proj);
+    }
+    qReady = false;
+    qCooldown = qCooldownMax * 1.5f;
 }
 
 void renderText(const std::string& text, int x, int y, SDL_Color color = {255, 255, 255}) {
@@ -144,58 +220,119 @@ bool checkCollision(const SDL_FRect& a, const SDL_FRect& b) {
             a.y + a.h > b.y);
 }
 
-void update(float deltaTime) {
-    // Di chuyển player đến vị trí click
-    float dx = targetPos.x - player.rect.x;
-    float dy = targetPos.y - player.rect.y;
-    float distance = std::sqrt(dx*dx + dy*dy);
+void applyUpgrade(int choice) {
+    if (upgradePoints < 10) return;
+    switch (choice) {
+        case 1:
+            playerSpeed *= 1.5f;
+            std::cout << "Upgraded Speed: " << playerSpeed << std::endl;
+            break;
+        case 2:
+            qCooldownMax *= 0.5f;
+            std::cout << "Upgraded Q Cooldown: " << qCooldownMax << std::endl;
+            break;
+        case 3:
+            projectileDamage += 3;
+            std::cout << "Upgraded Damage: " << projectileDamage << std::endl;
+            break;
+        case 4:
+            currentWeapon = SHOTGUN;
+            std::cout << "Upgraded to Shotgun!" << std::endl;
+            break;
+    }
+    upgradePoints -= 10;
+}
 
-    if (distance > 5.0f) {
-        player.rect.x += (dx / distance) * PLAYER_SPEED * deltaTime;
-        player.rect.y += (dy / distance) * PLAYER_SPEED * deltaTime;
+void applyPowerUp(PowerUp& pu) {
+    switch (pu.type) {
+        case PowerUp::SPEED_BOOST:
+            speedBoostTimer = std::max(speedBoostTimer, pu.timer);
+            if (!speedBoostActive) {
+                playerSpeed = PLAYER_SPEED * 1.5f;
+                speedBoostActive = true;
+            }
+            break;
+        case PowerUp::DAMAGE_BOOST:
+            damageBoostTimer = std::max(damageBoostTimer, pu.timer);
+            if (!damageBoostActive) {
+                projectileDamage = 2;
+                damageBoostActive = true;
+            }
+            break;
+        case PowerUp::SHIELD:
+            shieldTimer = std::max(shieldTimer, pu.timer);
+            if (!shieldActive) {
+                playerHealth = std::min(MAX_HEALTH, playerHealth + 50);
+                shieldActive = true;
+            }
+            break;
+    }
+    pu.active = false;
+}
+
+void update(float deltaTime) {
+    gameTime += deltaTime;
+
+    if (gameTime > LEVEL_DURATION * level) {
+        level++;
+        spawnRate = std::max(SPAWN_RATE_BASE - (level - 1) * SPAWN_RATE_DECREASE, 20.0f);
+        std::cout << "Level up! Current level: " << level << std::endl;
     }
 
-    // Cập nhật marker
+    float dx = targetPos.x - player.rect.x;
+    float dy = targetPos.y - player.rect.y;
+    float distance = std::sqrt(dx * dx + dy * dy);
+
+    if (distance > 5.0f) {
+        player.rect.x += (dx / distance) * playerSpeed * deltaTime;
+        player.rect.y += (dy / distance) * playerSpeed * deltaTime;
+    }
+
     for (auto& marker : markers) {
         marker.timer -= deltaTime;
     }
     markers.erase(std::remove_if(markers.begin(), markers.end(),
         [](const Marker& m) { return m.timer <= 0; }), markers.end());
 
-    // Cập nhật enemy
+    float currentEnemySpeed = ENEMY_SPEED + (level - 1) * ENEMY_SPEED_INCREASE;
     for (auto& enemy : enemies) {
         if (!enemy.active) continue;
 
         float dx = player.rect.x - enemy.rect.x;
         float dy = player.rect.y - enemy.rect.y;
-        float length = std::sqrt(dx*dx + dy*dy);
+        float length = std::sqrt(dx * dx + dy * dy);
 
         switch(enemy.type) {
             case BASIC:
-                enemy.rect.x += (dx / length) * ENEMY_SPEED * deltaTime;
-                enemy.rect.y += (dy / length) * ENEMY_SPEED * deltaTime;
+                enemy.rect.x += (dx / length) * currentEnemySpeed * deltaTime;
+                enemy.rect.y += (dy / length) * currentEnemySpeed * deltaTime;
                 break;
             case FAST:
-                enemy.rect.x += (dx / length) * (ENEMY_SPEED * 1.5f) * deltaTime;
-                enemy.rect.y += (dy / length) * (ENEMY_SPEED * 1.5f) * deltaTime;
+                enemy.rect.x += (dx / length) * (currentEnemySpeed * 1.5f) * deltaTime;
+                enemy.rect.y += (dy / length) * (currentEnemySpeed * 1.5f) * deltaTime;
                 break;
             case CHASER:
-                enemy.rect.x += (dx / length) * (ENEMY_SPEED * 0.8f) * deltaTime;
-                enemy.rect.y += (dy / length) * (ENEMY_SPEED * 0.8f) * deltaTime;
+                enemy.rect.x += (dx / length) * (currentEnemySpeed * 0.8f) * deltaTime;
+                enemy.rect.y += (dy / length) * (currentEnemySpeed * 0.8f) * deltaTime;
                 break;
         }
     }
 
-    // Cập nhật đạn
+    // Cập nhật đường đạn logic
     for (auto& proj : projectiles) {
         if (!proj.active) continue;
+
+        // Di chuyển đạn dựa trên vận tốc đã chuẩn hóa
         proj.rect.x += proj.vx * deltaTime;
         proj.rect.y += proj.vy * deltaTime;
-        if (proj.rect.x < 0 || proj.rect.x > SCREEN_WIDTH || proj.rect.y < 0 || proj.rect.y > SCREEN_HEIGHT)
+
+        // Kiểm tra biên màn hình (bao gồm cả kích thước đạn)
+        if (proj.rect.x + proj.rect.w < 0 || proj.rect.x > SCREEN_WIDTH ||
+            proj.rect.y + proj.rect.h < 0 || proj.rect.y > SCREEN_HEIGHT) {
             proj.active = false;
+        }
     }
 
-    // Va chạm đạn - enemy
     for (auto& proj : projectiles) {
         if (!proj.active) continue;
         for (auto& enemy : enemies) {
@@ -203,38 +340,70 @@ void update(float deltaTime) {
 
             if (checkCollision(proj.rect, enemy.rect)) {
                 proj.active = false;
-                enemy.health--;
+                enemy.health -= projectileDamage;
 
-                // Reset cooldown ngay khi chạm enemy
                 qReady = true;
                 qCooldown = 0;
 
                 if (enemy.health <= 0) {
                     enemy.active = false;
+                    spawnPowerUp(enemy.rect.x, enemy.rect.y);
                     comboTime = COMBO_TIMEOUT;
                     combo++;
                     score += SCORE_PER_KILL * combo;
+                    upgradePoints += 1;
                 }
             }
         }
     }
 
-    // Va chạm player-enemy
-    for (auto& enemy : enemies) {
-        if (!enemy.active) continue;
-
-        if (checkCollision(player.rect, enemy.rect)) {
-            std::cout << "Game Over! Score: " << score << std::endl;
-            SDL_Quit();
-            exit(0);
+    if (!shieldActive) {
+        for (auto& enemy : enemies) {
+            if (!enemy.active) continue;
+            if (checkCollision(player.rect, enemy.rect)) {
+                playerHealth -= 20;
+                enemy.active = false;
+                if (playerHealth <= 0) {
+                    std::cout << "Game Over! Score: " << score << std::endl;
+                    SDL_Quit();
+                    exit(0);
+                }
+            }
         }
     }
 
-    // Combo system
+    for (auto& pu : powerUps) {
+        if (pu.active && checkCollision(player.rect, pu.rect)) {
+            applyPowerUp(pu);
+        }
+    }
+    powerUps.erase(std::remove_if(powerUps.begin(), powerUps.end(),
+        [](const PowerUp& p) { return !p.active; }), powerUps.end());
+
+    if (speedBoostTimer > 0) {
+        speedBoostTimer -= deltaTime;
+        if (speedBoostTimer <= 0) {
+            speedBoostActive = false;
+            playerSpeed = PLAYER_SPEED;
+        }
+    }
+    if (damageBoostTimer > 0) {
+        damageBoostTimer -= deltaTime;
+        if (damageBoostTimer <= 0) {
+            damageBoostActive = false;
+            projectileDamage = 1;
+        }
+    }
+    if (shieldTimer > 0) {
+        shieldTimer -= deltaTime;
+        if (shieldTimer <= 0) {
+            shieldActive = false;
+        }
+    }
+
     if (comboTime > 0) comboTime -= deltaTime;
     else combo = 0;
 
-    // Cooldown Q
     if (!qReady) {
         qCooldown -= deltaTime;
         if (qCooldown <= 0) {
@@ -243,7 +412,6 @@ void update(float deltaTime) {
         }
     }
 
-    // Cleanup
     enemies.erase(std::remove_if(enemies.begin(), enemies.end(),
         [](const GameObject& e) { return !e.active; }), enemies.end());
     projectiles.erase(std::remove_if(projectiles.begin(), projectiles.end(),
@@ -254,19 +422,16 @@ void render() {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
-    // Vẽ player
     SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
     SDL_FRect playerRect = player.rect;
     SDL_RenderFillRectF(renderer, &playerRect);
 
-    // Vẽ marker di chuyển
     SDL_SetRenderDrawColor(renderer, 255, 255, 0, 100);
     for (const auto& marker : markers) {
         SDL_FRect markRect = {marker.position.x - 5, marker.position.y - 5, 10, 10};
         SDL_RenderFillRectF(renderer, &markRect);
     }
 
-    // Vẽ enemy
     for (const auto& enemy : enemies) {
         if (!enemy.active) continue;
         SDL_Color color;
@@ -280,7 +445,6 @@ void render() {
         SDL_RenderFillRectF(renderer, &enemyRect);
     }
 
-    // Vẽ đạn
     SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
     for (const auto& proj : projectiles) {
         if (!proj.active) continue;
@@ -288,13 +452,38 @@ void render() {
         SDL_RenderFillRectF(renderer, &bulletRect);
     }
 
-    // UI
-    renderText("Score: " + std::to_string(score), 10, 10);
+    for (const auto& pu : powerUps) {
+        if (!pu.active) continue;
+        SDL_Color color;
+        switch(pu.type) {
+            case PowerUp::SPEED_BOOST: color = {0, 255, 255, 255}; break;
+            case PowerUp::DAMAGE_BOOST: color = {255, 0, 0, 255}; break;
+            case PowerUp::SHIELD: color = {255, 255, 255, 255}; break;
+        }
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+        SDL_FRect puRect = pu.rect;
+        SDL_RenderFillRectF(renderer, &puRect);
+    }
 
-    // Thanh cooldown Q
+    renderText("Score: " + std::to_string(score), 10, 10);
+    renderText("Level: " + std::to_string(level), 10, 40);
+    renderText("Upgrade Points: " + std::to_string(upgradePoints), 10, 70);
+    renderText("Health: " + std::to_string(playerHealth) + "/" + std::to_string(MAX_HEALTH), 10, 100);
+    if (upgradePoints >= 10) {
+        renderText("1: Speed (+50%) | 2: Cooldown (-50%) | 3: Damage (+3) | 4: Shotgun", 10, 130);
+    }
+
+    renderText("Speed Boost: " + std::string(speedBoostActive ? "Active" : "Inactive") + " (" +
+               std::to_string(static_cast<int>(speedBoostTimer)) + "s)", 10, 160, {0, 255, 255});
+    renderText("Damage Boost: " + std::string(damageBoostActive ? "Active" : "Inactive") + " (" +
+               std::to_string(static_cast<int>(damageBoostTimer)) + "s)", 10, 190, {255, 0, 0});
+    renderText("Shield: " + std::string(shieldActive ? "Active" : "Inactive") + " (" +
+               std::to_string(static_cast<int>(shieldTimer)) + "s)", 10, 220, {255, 255, 255});
+    renderText("Weapon: " + std::string(currentWeapon == SINGLE ? "Single" : "Shotgun"), 10, 250);
+
     const int barWidth = 200;
     const int barHeight = 15;
-    float cooldownRatio = qCooldown / Q_COOLDOWN;
+    float cooldownRatio = qCooldown / qCooldownMax;
 
     SDL_Rect cooldownBg = {10, SCREEN_HEIGHT - 30, barWidth, barHeight};
     SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
@@ -305,7 +494,6 @@ void render() {
     SDL_SetRenderDrawColor(renderer, 0, 150, 255, 255);
     SDL_RenderFillRect(renderer, &cooldownFill);
 
-    // Hiển thị trạng thái Q
     SDL_Color qColor = qReady ? SDL_Color{0, 255, 0, 255} : SDL_Color{255, 0, 0, 255};
     renderText("[Q] Shoot", SCREEN_WIDTH - 120, SCREEN_HEIGHT - 30, qColor);
 
@@ -325,7 +513,7 @@ int main(int argc, char* argv[]) {
     if (!init()) return 1;
 
     player.rect = {SCREEN_WIDTH / 2.0f - PLAYER_SIZE / 2.0f,
-                   SCREEN_HEIGHT - 50.0f - PLAYER_SIZE / 2.0f,
+                   SCREEN_HEIGHT / 2.0f - PLAYER_SIZE / 2.0f,
                    PLAYER_SIZE, PLAYER_SIZE};
     player.active = true;
 
@@ -349,12 +537,22 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_q) {
-                shootProjectile();
+            if (event.type == SDL_KEYDOWN) {
+                if (event.key.keysym.sym == SDLK_q) {
+                    if (currentWeapon == SINGLE) shootProjectile();
+                    else if (currentWeapon == SHOTGUN) shootShotgun();
+                }
+                if (upgradePoints >= 10) {
+                    if (event.key.keysym.sym == SDLK_1) applyUpgrade(1);
+                    if (event.key.keysym.sym == SDLK_2) applyUpgrade(2);
+                    if (event.key.keysym.sym == SDLK_3) applyUpgrade(3);
+                    if (event.key.keysym.sym == SDLK_4) applyUpgrade(4);
+                }
             }
         }
 
-        if (rand() % 120 == 0) spawnEnemy();
+        if (rand() % static_cast<int>(spawnRate) == 0) spawnEnemy();
+
         update(deltaTime);
         render();
         SDL_Delay(16);

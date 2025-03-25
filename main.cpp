@@ -1,16 +1,31 @@
 #include <SDL.h>
 #include <iostream>
+#include <vector>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
 
 using namespace std;
 
 const int SCREEN_WIDTH = 1600;
 const int SCREEN_HEIGHT = 900;
 const int EZ_SIZE = 50;
-const float EZ_SPEED = 300.0f;  // Tốc độ di chuyển (pixel/giây)
+const float EZ_SPEED = 300.0f;
+const int ENEMY_SIZE = 50;
+const float ENEMY_SPEED = 150.0f;
+
+struct Enemy {
+    float x, y;
+
+    Enemy(float startX, float startY) {
+        x = startX;
+        y = startY;
+    }
+};
 
 SDL_Window* window = NULL;
 SDL_Renderer* renderer = NULL;
+vector<Enemy> enemies;
 
 bool init() {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -31,6 +46,7 @@ bool init() {
     }
 
     SDL_ShowCursor(SDL_ENABLE);
+    srand(time(0));
     return true;
 }
 
@@ -38,6 +54,12 @@ void close() {
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
+}
+
+void spawnEnemy() {
+    float startX = rand() % SCREEN_WIDTH;
+    float startY = 0; // Xuất hiện từ trên màn hình
+    enemies.push_back(Enemy(startX, startY));
 }
 
 int main(int argc, char* argv[]) {
@@ -51,53 +73,49 @@ int main(int argc, char* argv[]) {
     float x = SCREEN_WIDTH / 2 - EZ_SIZE / 2;
     float y = SCREEN_HEIGHT / 2 - EZ_SIZE / 2;
 
-    int targetX = x, targetY = y;
-    bool moving = false;
-
     int lastTick = SDL_GetTicks();
 
     while (!quit) {
         int currentTick = SDL_GetTicks();
-        float deltaTime = (currentTick - lastTick) / 1000.0f;  // Thời gian giữa 2 frame
+        float deltaTime = (currentTick - lastTick) / 1000.0f;
         lastTick = currentTick;
 
         while (SDL_PollEvent(&e) != 0) {
             if (e.type == SDL_QUIT) quit = true;
-            else if (e.type == SDL_MOUSEBUTTONDOWN) {
-                if (e.button.button == SDL_BUTTON_RIGHT) {  // Click chuột phải
-                    SDL_GetMouseState(&targetX, &targetY);
-                    moving = true;
-                }
-            }
         }
 
-        // Nếu đang di chuyển, tiến dần về đích
-        if (moving) {
-            float dx = targetX - x;
-            float dy = targetY - y;
+        // Sinh kẻ địch ngẫu nhiên
+        if (rand() % 100 < 2) {
+            spawnEnemy();
+        }
+
+        // Di chuyển kẻ địch về phía Ez
+        for (auto& enemy : enemies) {
+            float dx = x - enemy.x;
+            float dy = y - enemy.y;
             float distance = sqrt(dx * dx + dy * dy);
 
-            if (distance > 5) {  // Nếu chưa tới đích thì di chuyển
-                x += (dx / distance) * EZ_SPEED * deltaTime;
-                y += (dy / distance) * EZ_SPEED * deltaTime;
-            } else {
-                moving = false;  // Đến nơi thì dừng
+            if (distance > 0) {
+                enemy.x += (dx / distance) * ENEMY_SPEED * deltaTime;
+                enemy.y += (dy / distance) * ENEMY_SPEED * deltaTime;
             }
         }
-
-        // Giữ nhân vật trong màn hình
-        if (x < 0) x = 0;
-        if (x > SCREEN_WIDTH - EZ_SIZE) x = SCREEN_WIDTH - EZ_SIZE;
-        if (y < 0) y = 0;
-        if (y > SCREEN_HEIGHT - EZ_SIZE) y = SCREEN_HEIGHT - EZ_SIZE;
 
         // Vẽ màn hình
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
+        // Vẽ Ez
         SDL_Rect player = {(int)x, (int)y, EZ_SIZE, EZ_SIZE};
         SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
         SDL_RenderFillRect(renderer, &player);
+
+        // Vẽ kẻ địch
+        SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+        for (auto& enemy : enemies) {
+            SDL_Rect enemyRect = {(int)enemy.x, (int)enemy.y, ENEMY_SIZE, ENEMY_SIZE};
+            SDL_RenderFillRect(renderer, &enemyRect);
+        }
 
         SDL_RenderPresent(renderer);
     }

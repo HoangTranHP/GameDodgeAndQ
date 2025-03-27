@@ -58,12 +58,19 @@ TTF_Font* font = nullptr;
 
 struct GameObject {
     SDL_FRect rect;
+    SDL_FRect hitbox;
     float vx, vy;
     bool active;
     EnemyType type;
     int health;
     enum State { WALKING, SLASHING, DYING } state;
     float animTime;
+
+    void updateHitbox() {
+        float hitboxScale = 0.8f;
+        float offset = (1.0f - hitboxScale) * rect.w / 2.0f;
+        hitbox = {rect.x + offset, rect.y + offset, rect.w * hitboxScale, rect.h * hitboxScale};
+    }
 };
 
 struct Marker {
@@ -142,10 +149,9 @@ bool init() {
         return false;
     }
 
-    // Hàm phụ để tải sequence từ thư mục
     auto loadSequence = [&](Animation& anim, const std::string& enemyName, const std::string& state, int frameCount) {
         anim.frames.resize(frameCount);
-        anim.frameTime = 0.05f; // Thời gian mỗi frame
+        anim.frameTime = 0.05f;
         anim.currentFrame = 0;
         anim.elapsedTime = 0.0f;
         for (int i = 0; i < frameCount; ++i) {
@@ -157,26 +163,21 @@ bool init() {
         }
     };
 
-    // Tải texture cho player
     playerTexture = IMG_LoadTexture(renderer, "assets/player.png");
     if (!playerTexture) std::cout << "Failed to load player.png: " << IMG_GetError() << std::endl;
 
-    // Tải animation cho enemy BASIC
     loadSequence(enemyBasicAnim.walking, "enemy_basic", "Walking", 24);
     loadSequence(enemyBasicAnim.slashing, "enemy_basic", "Slashing", 12);
     loadSequence(enemyBasicAnim.dying, "enemy_basic", "Dying", 15);
 
-    // Tải animation cho enemy FAST
     loadSequence(enemyFastAnim.walking, "enemy_fast", "Walking", 24);
     loadSequence(enemyFastAnim.slashing, "enemy_fast", "Slashing", 12);
     loadSequence(enemyFastAnim.dying, "enemy_fast", "Dying", 15);
 
-    // Tải animation cho enemy CHASER
     loadSequence(enemyChaserAnim.walking, "enemy_chaser", "Walking", 24);
     loadSequence(enemyChaserAnim.slashing, "enemy_chaser", "Slashing", 12);
     loadSequence(enemyChaserAnim.dying, "enemy_chaser", "Dying", 15);
 
-    // Tải các texture khác
     projectileTexture = IMG_LoadTexture(renderer, "assets/projectile.png");
     if (!projectileTexture) std::cout << "Failed to load projectile.png: " << IMG_GetError() << std::endl;
     speedBoostTexture = IMG_LoadTexture(renderer, "assets/speed_boost.png");
@@ -191,7 +192,6 @@ bool init() {
     backgroundTexture = IMG_LoadTexture(renderer, "assets/background.png");
     if (!backgroundTexture) std::cout << "Failed to load background.png: " << IMG_GetError() << std::endl;
 
-    // Kiểm tra texture chính
     if (!playerTexture || !projectileTexture ||
         enemyBasicAnim.walking.frames.empty() || enemyFastAnim.walking.frames.empty() || enemyChaserAnim.walking.frames.empty()) {
         std::cout << "Critical textures failed to load. Exiting..." << std::endl;
@@ -207,6 +207,7 @@ void spawnEnemy() {
     enemy.type = static_cast<EnemyType>(rand() % 3);
     enemy.rect.w = ENEMY_SIZE;
     enemy.rect.h = ENEMY_SIZE;
+    enemy.updateHitbox();
 
     switch(enemy.type) {
         case BASIC: enemy.health = 1; break;
@@ -229,7 +230,7 @@ void spawnEnemy() {
 }
 
 void spawnPowerUp(float x, float y) {
-    if (rand() % 10 != 0) return;
+    if (rand() % 10 != 0) return; // 10% cơ hội sinh power-up
     PowerUp pu;
     pu.rect = {x, y, 20, 20};
     pu.type = static_cast<PowerUp::Type>(rand() % 3);
@@ -246,6 +247,7 @@ void shootProjectile() {
     proj.rect.h = PROJECTILE_SIZE;
     proj.rect.x = player.rect.x + player.rect.w / 2 - PROJECTILE_SIZE / 2;
     proj.rect.y = player.rect.y + player.rect.h / 2 - PROJECTILE_SIZE / 2;
+    proj.updateHitbox();
 
     int mouseX, mouseY;
     SDL_GetMouseState(&mouseX, &mouseY);
@@ -284,6 +286,7 @@ void shootShotgun() {
         proj.rect.h = PROJECTILE_SIZE;
         proj.rect.x = baseX;
         proj.rect.y = baseY;
+        proj.updateHitbox();
 
         if (length > 0) {
             float angle = atan2(dy, dx) + i * 0.2f;
@@ -383,6 +386,7 @@ void update(float deltaTime) {
     if (distance > 5.0f) {
         player.rect.x += (dx / distance) * playerSpeed * deltaTime;
         player.rect.y += (dy / distance) * playerSpeed * deltaTime;
+        player.updateHitbox();
     }
 
     for (auto& marker : markers) {
@@ -425,6 +429,11 @@ void update(float deltaTime) {
                 enemy.animTime = 0.0f;
                 if (enemy.state == GameObject::DYING && currentAnim->currentFrame == 0) {
                     enemy.active = false;
+                    score += SCORE_PER_KILL * (combo + 1); // Tăng điểm với combo
+                    combo++;
+                    comboTime = COMBO_TIMEOUT; // Reset thời gian combo
+                    upgradePoints += 1; // Tăng điểm nâng cấp
+                    spawnPowerUp(enemy.rect.x, enemy.rect.y); // Sinh power-up
                 }
             }
         }
@@ -443,6 +452,7 @@ void update(float deltaTime) {
                 enemy.rect.y += (dy / length) * (currentEnemySpeed * 0.8f) * deltaTime;
                 break;
         }
+        enemy.updateHitbox();
 
         if (length < 50.0f && enemy.state != GameObject::DYING) {
             enemy.state = GameObject::SLASHING;
@@ -455,6 +465,7 @@ void update(float deltaTime) {
         if (!proj.active) continue;
         proj.rect.x += proj.vx * deltaTime;
         proj.rect.y += proj.vy * deltaTime;
+        proj.updateHitbox();
         if (proj.rect.x + proj.rect.w < 0 || proj.rect.x > SCREEN_WIDTH ||
             proj.rect.y + proj.rect.h < 0 || proj.rect.y > SCREEN_HEIGHT) {
             proj.active = false;
@@ -464,8 +475,8 @@ void update(float deltaTime) {
     for (auto& proj : projectiles) {
         if (!proj.active) continue;
         for (auto& enemy : enemies) {
-            if (!enemy.active) continue;
-            if (checkCollision(proj.rect, enemy.rect)) {
+            if (!enemy.active || enemy.state == GameObject::DYING) continue;
+            if (checkCollision(proj.hitbox, enemy.hitbox)) {
                 proj.active = false;
                 enemy.health -= projectileDamage;
                 qReady = true;
@@ -474,16 +485,18 @@ void update(float deltaTime) {
                     enemy.state = GameObject::DYING;
                     enemy.vx = 0; enemy.vy = 0;
                 }
+                break;
             }
         }
     }
 
+    static float lastDamageTime = 0.0f;
     if (!shieldActive) {
         for (auto& enemy : enemies) {
-            if (!enemy.active) continue;
-            if (checkCollision(player.rect, enemy.rect)) {
+            if (!enemy.active || enemy.state != GameObject::SLASHING) continue;
+            if (checkCollision(player.hitbox, enemy.hitbox) && gameTime - lastDamageTime >= 0.5f) {
                 playerHealth -= 20;
-                enemy.active = false;
+                lastDamageTime = gameTime;
                 if (playerHealth <= 0) {
                     std::cout << "Game Over! Score: " << score << std::endl;
                     SDL_Quit();
@@ -494,7 +507,7 @@ void update(float deltaTime) {
     }
 
     for (auto& pu : powerUps) {
-        if (pu.active && checkCollision(player.rect, pu.rect)) {
+        if (pu.active && checkCollision(player.hitbox, pu.rect)) {
             applyPowerUp(pu);
         }
     }
@@ -582,7 +595,8 @@ void render() {
 
     for (const auto& proj : projectiles) {
         if (!proj.active) continue;
-        SDL_RenderCopyF(renderer, projectileTexture, nullptr, &proj.rect);
+        float angle = atan2(proj.vy, proj.vx) * 180.0f / M_PI;
+        SDL_RenderCopyExF(renderer, projectileTexture, nullptr, &proj.rect, angle, nullptr, SDL_FLIP_NONE);
     }
 
     for (const auto& pu : powerUps) {
@@ -627,6 +641,7 @@ void render() {
     renderText("Shield: " + std::string(shieldActive ? "Active" : "Inactive") + " (" +
                std::to_string(static_cast<int>(shieldTimer)) + "s)", 10, 220, {255, 255, 255});
     renderText("Weapon: " + std::string(currentWeapon == SINGLE ? "Single" : "Shotgun"), 10, 250);
+    renderText("Combo: " + std::to_string(combo), 10, 280); // Hiển thị combo
 
     const int barWidth = 200;
     const int barHeight = 15;
@@ -676,9 +691,8 @@ int main(int argc, char* argv[]) {
     srand(time(nullptr));
     if (!init()) return 1;
 
-    player.rect = {SCREEN_WIDTH / 2.0f - PLAYER_SIZE / 2.0f,
-                   SCREEN_HEIGHT / 2.0f - PLAYER_SIZE / 2.0f,
-                   PLAYER_SIZE, PLAYER_SIZE};
+    player.rect = {SCREEN_WIDTH / 2.0f - PLAYER_SIZE / 2.0f, SCREEN_HEIGHT / 2.0f - PLAYER_SIZE / 2.0f, PLAYER_SIZE, PLAYER_SIZE};
+    player.updateHitbox();
     player.active = true;
 
     Uint32 lastTime = SDL_GetTicks();

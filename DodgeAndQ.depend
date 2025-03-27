@@ -1,5 +1,5 @@
 # depslib dependency file v1.0
-1743050758 source:d:\uet\ltnc\sdl\demosdl2\dodgeandq\gamedodgeandq\main.cpp
+1743054275 source:d:\uet\ltnc\sdl\demosdl2\dodgeandq\gamedodgeandq\main.cpp
 	<SDL.h>
 	<SDL_ttf.h>
 	<SDL_image.h>

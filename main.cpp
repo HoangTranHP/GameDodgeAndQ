@@ -145,7 +145,7 @@ bool init() {
     // Hàm phụ để tải sequence từ thư mục
     auto loadSequence = [&](Animation& anim, const std::string& enemyName, const std::string& state, int frameCount) {
         anim.frames.resize(frameCount);
-        anim.frameTime = 0.2f; // Thời gian mỗi frame
+        anim.frameTime = 0.05f; // Thời gian mỗi frame
         anim.currentFrame = 0;
         anim.elapsedTime = 0.0f;
         for (int i = 0; i < frameCount; ++i) {

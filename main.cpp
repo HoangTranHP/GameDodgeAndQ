@@ -1,5 +1,6 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include <SDL_image.h>
 #include <vector>
 #include <cmath>
 #include <string>
@@ -10,9 +11,9 @@
 
 const int SCREEN_WIDTH = 1600;
 const int SCREEN_HEIGHT = 900;
-const int PLAYER_SIZE = 60;
-const int ENEMY_SIZE = 36;
-const int PROJECTILE_SIZE = 10;
+const int PLAYER_SIZE = 100;
+const int ENEMY_SIZE = 100;
+const int PROJECTILE_SIZE = 100;
 const float PLAYER_SPEED = 100.0f;
 const float ENEMY_SPEED = 95.0f;
 const float PROJECTILE_SPEED = 1000.0f;
@@ -27,6 +28,30 @@ const float ENEMY_SPEED_INCREASE = 10.0f;
 enum EnemyType { BASIC, FAST, CHASER };
 enum WeaponType { SINGLE, SHOTGUN };
 
+SDL_Texture* playerTexture = nullptr;
+SDL_Texture* projectileTexture = nullptr;
+SDL_Texture* speedBoostTexture = nullptr;
+SDL_Texture* damageBoostTexture = nullptr;
+SDL_Texture* shieldTexture = nullptr;
+SDL_Texture* backgroundTexture = nullptr;
+
+struct Animation {
+    std::vector<SDL_Texture*> frames;
+    float frameTime;
+    int currentFrame;
+    float elapsedTime;
+};
+
+struct EnemyAnimations {
+    Animation walking;
+    Animation slashing;
+    Animation dying;
+};
+
+EnemyAnimations enemyBasicAnim;
+EnemyAnimations enemyFastAnim;
+EnemyAnimations enemyChaserAnim;
+
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
 TTF_Font* font = nullptr;
@@ -37,6 +62,8 @@ struct GameObject {
     bool active;
     EnemyType type;
     int health;
+    enum State { WALKING, SLASHING, DYING } state;
+    float animTime;
 };
 
 struct Marker {
@@ -85,6 +112,12 @@ bool init() {
         return false;
     }
 
+    int imgFlags = IMG_INIT_PNG | IMG_INIT_JPG;
+    if ((IMG_Init(imgFlags) & imgFlags) != imgFlags) {
+        std::cout << "SDL_image init failed: " << IMG_GetError() << std::endl;
+        return false;
+    }
+
     if (TTF_Init() == -1) {
         std::cout << "TTF init failed: " << TTF_GetError() << std::endl;
         return false;
@@ -92,14 +125,76 @@ bool init() {
 
     window = SDL_CreateWindow("DodgeAndQ", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                              SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
-    if (!window) return false;
+    if (!window) {
+        std::cout << "Window creation failed: " << SDL_GetError() << std::endl;
+        return false;
+    }
 
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (!renderer) return false;
+    if (!renderer) {
+        std::cout << "Renderer creation failed: " << SDL_GetError() << std::endl;
+        return false;
+    }
 
     font = TTF_OpenFont("arial.ttf", 24);
     if (!font) {
         std::cout << "Failed to load font: " << TTF_GetError() << std::endl;
+        return false;
+    }
+
+    // Hàm phụ để tải sequence từ thư mục
+    auto loadSequence = [&](Animation& anim, const std::string& enemyName, const std::string& state, int frameCount) {
+        anim.frames.resize(frameCount);
+        anim.frameTime = 0.2f; // Thời gian mỗi frame
+        anim.currentFrame = 0;
+        anim.elapsedTime = 0.0f;
+        for (int i = 0; i < frameCount; ++i) {
+            std::string fileName = "assets/" + enemyName + "/" + state + "/" + enemyName + "_" + state + "_" + std::to_string(i + 1) + ".png";
+            anim.frames[i] = IMG_LoadTexture(renderer, fileName.c_str());
+            if (!anim.frames[i]) {
+                std::cout << "Failed to load " << fileName << ": " << IMG_GetError() << std::endl;
+            }
+        }
+    };
+
+    // Tải texture cho player
+    playerTexture = IMG_LoadTexture(renderer, "assets/player.png");
+    if (!playerTexture) std::cout << "Failed to load player.png: " << IMG_GetError() << std::endl;
+
+    // Tải animation cho enemy BASIC
+    loadSequence(enemyBasicAnim.walking, "enemy_basic", "Walking", 24);
+    loadSequence(enemyBasicAnim.slashing, "enemy_basic", "Slashing", 12);
+    loadSequence(enemyBasicAnim.dying, "enemy_basic", "Dying", 15);
+
+    // Tải animation cho enemy FAST
+    loadSequence(enemyFastAnim.walking, "enemy_fast", "Walking", 24);
+    loadSequence(enemyFastAnim.slashing, "enemy_fast", "Slashing", 12);
+    loadSequence(enemyFastAnim.dying, "enemy_fast", "Dying", 15);
+
+    // Tải animation cho enemy CHASER
+    loadSequence(enemyChaserAnim.walking, "enemy_chaser", "Walking", 24);
+    loadSequence(enemyChaserAnim.slashing, "enemy_chaser", "Slashing", 12);
+    loadSequence(enemyChaserAnim.dying, "enemy_chaser", "Dying", 15);
+
+    // Tải các texture khác
+    projectileTexture = IMG_LoadTexture(renderer, "assets/projectile.png");
+    if (!projectileTexture) std::cout << "Failed to load projectile.png: " << IMG_GetError() << std::endl;
+    speedBoostTexture = IMG_LoadTexture(renderer, "assets/speed_boost.png");
+    if (!speedBoostTexture) std::cout << "Failed to load speed_boost.png: " << IMG_GetError() << std::endl;
+    damageBoostTexture = IMG_LoadTexture(renderer, "assets/damage_boost.png");
+    if (!damageBoostTexture) std::cout << "Failed to load damage_boost.png: " << IMG_GetError() << std::endl;
+    shieldTexture = IMG_LoadTexture(renderer, "assets/shield.png");
+    if (!shieldTexture) {
+        std::cout << "Failed to load shield.png: " << IMG_GetError() << ". Using fallback..." << std::endl;
+        shieldTexture = nullptr;
+    }
+    backgroundTexture = IMG_LoadTexture(renderer, "assets/background.png");
+    if (!backgroundTexture) std::cout << "Failed to load background.png: " << IMG_GetError() << std::endl;
+
+    // Kiểm tra texture chính
+    if (!playerTexture || !projectileTexture ||
+        enemyBasicAnim.walking.frames.empty() || enemyFastAnim.walking.frames.empty() || enemyChaserAnim.walking.frames.empty()) {
+        std::cout << "Critical textures failed to load. Exiting..." << std::endl;
         return false;
     }
 
@@ -128,6 +223,8 @@ void spawnEnemy() {
     }
 
     enemy.active = true;
+    enemy.state = GameObject::WALKING;
+    enemy.animTime = 0.0f;
     enemies.push_back(enemy);
 }
 
@@ -161,7 +258,7 @@ void shootProjectile() {
         proj.vy = (dy / length) * PROJECTILE_SPEED;
     } else {
         proj.vx = 0;
-        proj.vy = PROJECTILE_SPEED; // Mặc định bắn lên nếu không có hướng
+        proj.vy = PROJECTILE_SPEED;
     }
 
     proj.active = true;
@@ -189,12 +286,12 @@ void shootShotgun() {
         proj.rect.y = baseY;
 
         if (length > 0) {
-            float angle = atan2(dy, dx) + i * 0.2f; // Góc lệch cho shotgun
+            float angle = atan2(dy, dx) + i * 0.2f;
             proj.vx = cos(angle) * PROJECTILE_SPEED;
             proj.vy = sin(angle) * PROJECTILE_SPEED;
         } else {
             proj.vx = 0;
-            proj.vy = PROJECTILE_SPEED; // Mặc định bắn lên
+            proj.vy = PROJECTILE_SPEED;
         }
 
         proj.active = true;
@@ -302,6 +399,36 @@ void update(float deltaTime) {
         float dy = player.rect.y - enemy.rect.y;
         float length = std::sqrt(dx * dx + dy * dy);
 
+        Animation* currentAnim = nullptr;
+        switch (enemy.type) {
+            case BASIC:
+                if (enemy.state == GameObject::WALKING) currentAnim = &enemyBasicAnim.walking;
+                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyBasicAnim.slashing;
+                else if (enemy.state == GameObject::DYING) currentAnim = &enemyBasicAnim.dying;
+                break;
+            case FAST:
+                if (enemy.state == GameObject::WALKING) currentAnim = &enemyFastAnim.walking;
+                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyFastAnim.slashing;
+                else if (enemy.state == GameObject::DYING) currentAnim = &enemyFastAnim.dying;
+                break;
+            case CHASER:
+                if (enemy.state == GameObject::WALKING) currentAnim = &enemyChaserAnim.walking;
+                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyChaserAnim.slashing;
+                else if (enemy.state == GameObject::DYING) currentAnim = &enemyChaserAnim.dying;
+                break;
+        }
+
+        if (currentAnim) {
+            enemy.animTime += deltaTime;
+            if (enemy.animTime >= currentAnim->frameTime) {
+                currentAnim->currentFrame = (currentAnim->currentFrame + 1) % currentAnim->frames.size();
+                enemy.animTime = 0.0f;
+                if (enemy.state == GameObject::DYING && currentAnim->currentFrame == 0) {
+                    enemy.active = false;
+                }
+            }
+        }
+
         switch(enemy.type) {
             case BASIC:
                 enemy.rect.x += (dx / length) * currentEnemySpeed * deltaTime;
@@ -316,17 +443,18 @@ void update(float deltaTime) {
                 enemy.rect.y += (dy / length) * (currentEnemySpeed * 0.8f) * deltaTime;
                 break;
         }
+
+        if (length < 50.0f && enemy.state != GameObject::DYING) {
+            enemy.state = GameObject::SLASHING;
+        } else if (enemy.state != GameObject::DYING) {
+            enemy.state = GameObject::WALKING;
+        }
     }
 
-    // Cập nhật đường đạn logic
     for (auto& proj : projectiles) {
         if (!proj.active) continue;
-
-        // Di chuyển đạn dựa trên vận tốc đã chuẩn hóa
         proj.rect.x += proj.vx * deltaTime;
         proj.rect.y += proj.vy * deltaTime;
-
-        // Kiểm tra biên màn hình (bao gồm cả kích thước đạn)
         if (proj.rect.x + proj.rect.w < 0 || proj.rect.x > SCREEN_WIDTH ||
             proj.rect.y + proj.rect.h < 0 || proj.rect.y > SCREEN_HEIGHT) {
             proj.active = false;
@@ -337,21 +465,14 @@ void update(float deltaTime) {
         if (!proj.active) continue;
         for (auto& enemy : enemies) {
             if (!enemy.active) continue;
-
             if (checkCollision(proj.rect, enemy.rect)) {
                 proj.active = false;
                 enemy.health -= projectileDamage;
-
                 qReady = true;
                 qCooldown = 0;
-
-                if (enemy.health <= 0) {
-                    enemy.active = false;
-                    spawnPowerUp(enemy.rect.x, enemy.rect.y);
-                    comboTime = COMBO_TIMEOUT;
-                    combo++;
-                    score += SCORE_PER_KILL * combo;
-                    upgradePoints += 1;
+                if (enemy.health <= 0 && enemy.state != GameObject::DYING) {
+                    enemy.state = GameObject::DYING;
+                    enemy.vx = 0; enemy.vy = 0;
                 }
             }
         }
@@ -422,9 +543,11 @@ void render() {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
-    SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
-    SDL_FRect playerRect = player.rect;
-    SDL_RenderFillRectF(renderer, &playerRect);
+    if (backgroundTexture) {
+        SDL_RenderCopy(renderer, backgroundTexture, nullptr, nullptr);
+    }
+
+    SDL_RenderCopyF(renderer, playerTexture, nullptr, &player.rect);
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 0, 100);
     for (const auto& marker : markers) {
@@ -434,35 +557,59 @@ void render() {
 
     for (const auto& enemy : enemies) {
         if (!enemy.active) continue;
-        SDL_Color color;
-        switch(enemy.type) {
-            case BASIC: color = {255, 0, 0, 255}; break;
-            case FAST: color = {255, 165, 0, 255}; break;
-            case CHASER: color = {255, 0, 255, 255}; break;
+        Animation* currentAnim = nullptr;
+        switch (enemy.type) {
+            case BASIC:
+                if (enemy.state == GameObject::WALKING) currentAnim = &enemyBasicAnim.walking;
+                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyBasicAnim.slashing;
+                else if (enemy.state == GameObject::DYING) currentAnim = &enemyBasicAnim.dying;
+                break;
+            case FAST:
+                if (enemy.state == GameObject::WALKING) currentAnim = &enemyFastAnim.walking;
+                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyFastAnim.slashing;
+                else if (enemy.state == GameObject::DYING) currentAnim = &enemyFastAnim.dying;
+                break;
+            case CHASER:
+                if (enemy.state == GameObject::WALKING) currentAnim = &enemyChaserAnim.walking;
+                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyChaserAnim.slashing;
+                else if (enemy.state == GameObject::DYING) currentAnim = &enemyChaserAnim.dying;
+                break;
         }
-        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-        SDL_FRect enemyRect = enemy.rect;
-        SDL_RenderFillRectF(renderer, &enemyRect);
+        if (currentAnim && !currentAnim->frames.empty()) {
+            SDL_RenderCopyF(renderer, currentAnim->frames[currentAnim->currentFrame], nullptr, &enemy.rect);
+        }
     }
 
-    SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
     for (const auto& proj : projectiles) {
         if (!proj.active) continue;
-        SDL_FRect bulletRect = proj.rect;
-        SDL_RenderFillRectF(renderer, &bulletRect);
+        SDL_RenderCopyF(renderer, projectileTexture, nullptr, &proj.rect);
     }
 
     for (const auto& pu : powerUps) {
         if (!pu.active) continue;
-        SDL_Color color;
-        switch(pu.type) {
-            case PowerUp::SPEED_BOOST: color = {0, 255, 255, 255}; break;
-            case PowerUp::DAMAGE_BOOST: color = {255, 0, 0, 255}; break;
-            case PowerUp::SHIELD: color = {255, 255, 255, 255}; break;
+        SDL_Texture* texture = nullptr;
+        SDL_Color fallbackColor;
+        switch (pu.type) {
+            case PowerUp::SPEED_BOOST:
+                texture = speedBoostTexture;
+                fallbackColor = {0, 255, 255, 255};
+                break;
+            case PowerUp::DAMAGE_BOOST:
+                texture = damageBoostTexture;
+                fallbackColor = {255, 0, 0, 255};
+                break;
+            case PowerUp::SHIELD:
+                texture = shieldTexture;
+                fallbackColor = {255, 255, 255, 255};
+                break;
         }
-        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-        SDL_FRect puRect = pu.rect;
-        SDL_RenderFillRectF(renderer, &puRect);
+        if (texture) {
+            SDL_RenderCopyF(renderer, texture, nullptr, &pu.rect);
+        } else {
+            SDL_SetRenderDrawColor(renderer, fallbackColor.r, fallbackColor.g, fallbackColor.b, fallbackColor.a);
+            SDL_FRect puRect = pu.rect;
+            SDL_RenderFillRectF(renderer, &puRect);
+        }
     }
 
     renderText("Score: " + std::to_string(score), 10, 10);
@@ -501,10 +648,27 @@ void render() {
 }
 
 void clean() {
+    SDL_DestroyTexture(playerTexture);
+    for (auto& frame : enemyBasicAnim.walking.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyBasicAnim.slashing.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyBasicAnim.dying.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyFastAnim.walking.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyFastAnim.slashing.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyFastAnim.dying.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyChaserAnim.walking.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyChaserAnim.slashing.frames) SDL_DestroyTexture(frame);
+    for (auto& frame : enemyChaserAnim.dying.frames) SDL_DestroyTexture(frame);
+    SDL_DestroyTexture(projectileTexture);
+    SDL_DestroyTexture(speedBoostTexture);
+    SDL_DestroyTexture(damageBoostTexture);
+    SDL_DestroyTexture(shieldTexture);
+    SDL_DestroyTexture(backgroundTexture);
+
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     TTF_CloseFont(font);
     TTF_Quit();
+    IMG_Quit();
     SDL_Quit();
 }
 

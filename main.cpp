@@ -27,8 +27,9 @@ const float ENEMY_SPEED_INCREASE = 10.0f;
 
 enum EnemyType { BASIC, FAST, CHASER };
 enum WeaponType { SINGLE, SHOTGUN };
+enum PlayerState { IDLE, WALK, RUN, ATTACK, HURT, DEAD };
+enum EnemyState { WALKING, SLASHING, DYING };
 
-SDL_Texture* playerTexture = nullptr;
 SDL_Texture* projectileTexture = nullptr;
 SDL_Texture* speedBoostTexture = nullptr;
 SDL_Texture* damageBoostTexture = nullptr;
@@ -36,10 +37,11 @@ SDL_Texture* shieldTexture = nullptr;
 SDL_Texture* backgroundTexture = nullptr;
 
 struct Animation {
-    std::vector<SDL_Texture*> frames;
-    float frameTime;
-    int currentFrame;
-    float elapsedTime;
+    SDL_Texture* texture;         // Texture chứa sprite sheet
+    std::vector<SDL_Rect> frames; // Tọa độ các frame trong sprite sheet
+    float frameTime;              // Thời gian giữa các frame
+    int currentFrame;             // Frame hiện tại
+    float elapsedTime;            // Thời gian đã trôi qua
 };
 
 struct EnemyAnimations {
@@ -48,9 +50,19 @@ struct EnemyAnimations {
     Animation dying;
 };
 
+struct PlayerAnimations {
+    Animation idle;
+    Animation walk;
+    Animation run;
+    Animation attack;
+    Animation hurt;
+    Animation dead;
+};
+
 EnemyAnimations enemyBasicAnim;
 EnemyAnimations enemyFastAnim;
 EnemyAnimations enemyChaserAnim;
+PlayerAnimations playerAnim;
 
 SDL_Window* window = nullptr;
 SDL_Renderer* renderer = nullptr;
@@ -61,9 +73,12 @@ struct GameObject {
     SDL_FRect hitbox;
     float vx, vy;
     bool active;
-    EnemyType type;
+    EnemyType type; // Chỉ dùng cho enemy
     int health;
-    enum State { WALKING, SLASHING, DYING } state;
+    union {
+        EnemyState enemyState;  // Dùng cho enemy
+        PlayerState playerState; // Dùng cho player
+    };
     float animTime;
 
     void updateHitbox() {
@@ -154,17 +169,52 @@ bool init() {
         anim.frameTime = 0.05f;
         anim.currentFrame = 0;
         anim.elapsedTime = 0.0f;
+        std::string fileName = "assets/" + enemyName + "/" + state + "/" + enemyName + "_" + state + "_1.png"; // Giả sử file đầu tiên
+        anim.texture = IMG_LoadTexture(renderer, fileName.c_str());
+        if (!anim.texture) {
+            std::cout << "Failed to load " << fileName << ": " << IMG_GetError() << std::endl;
+            return;
+        }
+        int w, h;
+        SDL_QueryTexture(anim.texture, nullptr, nullptr, &w, &h);
+        int frameWidth = w / frameCount;
         for (int i = 0; i < frameCount; ++i) {
-            std::string fileName = "assets/" + enemyName + "/" + state + "/" + enemyName + "_" + state + "_" + std::to_string(i + 1) + ".png";
-            anim.frames[i] = IMG_LoadTexture(renderer, fileName.c_str());
-            if (!anim.frames[i]) {
-                std::cout << "Failed to load " << fileName << ": " << IMG_GetError() << std::endl;
-            }
+            anim.frames[i] = {i * frameWidth, 0, frameWidth, h};
         }
     };
 
-    playerTexture = IMG_LoadTexture(renderer, "assets/player.png");
-    if (!playerTexture) std::cout << "Failed to load player.png: " << IMG_GetError() << std::endl;
+    auto loadPlayerAnimation = [&](Animation& anim, const std::string& fileName, int frameCount) {
+        anim.frameTime = 0.05f;
+        anim.currentFrame = 0;
+        anim.elapsedTime = 0.0f;
+        std::string path = "assets/player/" + fileName;
+        anim.texture = IMG_LoadTexture(renderer, path.c_str());
+        if (!anim.texture) {
+            std::cout << "Failed to load " << path << ": " << IMG_GetError() << std::endl;
+            return;
+        }
+        int w, h;
+        SDL_QueryTexture(anim.texture, nullptr, nullptr, &w, &h);
+        int frameWidth = w / frameCount;
+        anim.frames.resize(frameCount);
+        for (int i = 0; i < frameCount; ++i) {
+            anim.frames[i] = {i * frameWidth, 0, frameWidth, h};
+        }
+    };
+
+    // Tải sprite sheet cho player (số frame mẫu, thay đổi theo thực tế)
+    loadPlayerAnimation(playerAnim.idle, "idle.png", 6);    // Ví dụ: 4 frame cho IDLE
+    loadPlayerAnimation(playerAnim.walk, "walk.png", 7);    // Ví dụ: 8 frame cho WALK
+    loadPlayerAnimation(playerAnim.run, "run.png", 8);      // Ví dụ: 8 frame cho RUN
+    loadPlayerAnimation(playerAnim.attack, "attack.png", 7); // Ví dụ: 6 frame cho ATTACK
+    loadPlayerAnimation(playerAnim.hurt, "hurt.png", 4);    // Ví dụ: 4 frame cho HURT
+    loadPlayerAnimation(playerAnim.dead, "dead.png", 4);    // Ví dụ: 6 frame cho DEAD
+
+    if (!playerAnim.idle.texture || !playerAnim.walk.texture || !playerAnim.run.texture ||
+        !playerAnim.attack.texture || !playerAnim.hurt.texture || !playerAnim.dead.texture) {
+        std::cout << "Critical player textures failed to load. Exiting..." << std::endl;
+        return false;
+    }
 
     loadSequence(enemyBasicAnim.walking, "enemy_basic", "Walking", 24);
     loadSequence(enemyBasicAnim.slashing, "enemy_basic", "Slashing", 12);
@@ -192,8 +242,8 @@ bool init() {
     backgroundTexture = IMG_LoadTexture(renderer, "assets/background.png");
     if (!backgroundTexture) std::cout << "Failed to load background.png: " << IMG_GetError() << std::endl;
 
-    if (!playerTexture || !projectileTexture ||
-        enemyBasicAnim.walking.frames.empty() || enemyFastAnim.walking.frames.empty() || enemyChaserAnim.walking.frames.empty()) {
+    if (!projectileTexture || enemyBasicAnim.walking.frames.empty() ||
+        enemyFastAnim.walking.frames.empty() || enemyChaserAnim.walking.frames.empty()) {
         std::cout << "Critical textures failed to load. Exiting..." << std::endl;
         return false;
     }
@@ -224,13 +274,13 @@ void spawnEnemy() {
     }
 
     enemy.active = true;
-    enemy.state = GameObject::WALKING;
+    enemy.enemyState = WALKING;
     enemy.animTime = 0.0f;
     enemies.push_back(enemy);
 }
 
 void spawnPowerUp(float x, float y) {
-    if (rand() % 10 != 0) return; // 10% cơ hội sinh power-up
+    if (rand() % 10 != 0) return;
     PowerUp pu;
     pu.rect = {x, y, 20, 20};
     pu.type = static_cast<PowerUp::Type>(rand() % 3);
@@ -382,11 +432,48 @@ void update(float deltaTime) {
     float dx = targetPos.x - player.rect.x;
     float dy = targetPos.y - player.rect.y;
     float distance = std::sqrt(dx * dx + dy * dy);
+    float currentSpeed = (distance > 0) ? (distance / deltaTime) : 0.0f;
 
-    if (distance > 5.0f) {
+    if (player.health <= 0 && player.playerState != DEAD) {
+        player.playerState = DEAD;
+        player.animTime = 0.0f;
+    } else if (player.playerState == HURT && player.animTime >= playerAnim.hurt.frameTime * playerAnim.hurt.frames.size()) {
+        player.playerState = IDLE;
+    } else if (player.playerState == ATTACK && player.animTime >= playerAnim.attack.frameTime * playerAnim.attack.frames.size()) {
+        player.playerState = IDLE;
+    } else if (distance > 5.0f) {
+        if (currentSpeed > 150.0f) {
+            player.playerState = RUN;
+        } else {
+            player.playerState = WALK;
+        }
         player.rect.x += (dx / distance) * playerSpeed * deltaTime;
         player.rect.y += (dy / distance) * playerSpeed * deltaTime;
         player.updateHitbox();
+    } else if (player.playerState != ATTACK && player.playerState != HURT && player.playerState != DEAD) {
+        player.playerState = IDLE;
+    }
+
+    Animation* currentPlayerAnim = nullptr;
+    switch (player.playerState) {
+        case IDLE: currentPlayerAnim = &playerAnim.idle; break;
+        case WALK: currentPlayerAnim = &playerAnim.walk; break;
+        case RUN: currentPlayerAnim = &playerAnim.run; break;
+        case ATTACK: currentPlayerAnim = &playerAnim.attack; break;
+        case HURT: currentPlayerAnim = &playerAnim.hurt; break;
+        case DEAD: currentPlayerAnim = &playerAnim.dead; break;
+    }
+    if (currentPlayerAnim) {
+        player.animTime += deltaTime;
+        if (player.animTime >= currentPlayerAnim->frameTime) {
+            currentPlayerAnim->currentFrame = (currentPlayerAnim->currentFrame + 1) % currentPlayerAnim->frames.size();
+            player.animTime = 0.0f;
+            if (player.playerState == DEAD && currentPlayerAnim->currentFrame == 0) {
+                std::cout << "Game Over! Score: " << score << std::endl;
+                SDL_Quit();
+                exit(0);
+            }
+        }
     }
 
     for (auto& marker : markers) {
@@ -406,19 +493,19 @@ void update(float deltaTime) {
         Animation* currentAnim = nullptr;
         switch (enemy.type) {
             case BASIC:
-                if (enemy.state == GameObject::WALKING) currentAnim = &enemyBasicAnim.walking;
-                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyBasicAnim.slashing;
-                else if (enemy.state == GameObject::DYING) currentAnim = &enemyBasicAnim.dying;
+                if (enemy.enemyState == WALKING) currentAnim = &enemyBasicAnim.walking;
+                else if (enemy.enemyState == SLASHING) currentAnim = &enemyBasicAnim.slashing;
+                else if (enemy.enemyState == DYING) currentAnim = &enemyBasicAnim.dying;
                 break;
             case FAST:
-                if (enemy.state == GameObject::WALKING) currentAnim = &enemyFastAnim.walking;
-                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyFastAnim.slashing;
-                else if (enemy.state == GameObject::DYING) currentAnim = &enemyFastAnim.dying;
+                if (enemy.enemyState == WALKING) currentAnim = &enemyFastAnim.walking;
+                else if (enemy.enemyState == SLASHING) currentAnim = &enemyFastAnim.slashing;
+                else if (enemy.enemyState == DYING) currentAnim = &enemyFastAnim.dying;
                 break;
             case CHASER:
-                if (enemy.state == GameObject::WALKING) currentAnim = &enemyChaserAnim.walking;
-                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyChaserAnim.slashing;
-                else if (enemy.state == GameObject::DYING) currentAnim = &enemyChaserAnim.dying;
+                if (enemy.enemyState == WALKING) currentAnim = &enemyChaserAnim.walking;
+                else if (enemy.enemyState == SLASHING) currentAnim = &enemyChaserAnim.slashing;
+                else if (enemy.enemyState == DYING) currentAnim = &enemyChaserAnim.dying;
                 break;
         }
 
@@ -427,13 +514,13 @@ void update(float deltaTime) {
             if (enemy.animTime >= currentAnim->frameTime) {
                 currentAnim->currentFrame = (currentAnim->currentFrame + 1) % currentAnim->frames.size();
                 enemy.animTime = 0.0f;
-                if (enemy.state == GameObject::DYING && currentAnim->currentFrame == 0) {
+                if (enemy.enemyState == DYING && currentAnim->currentFrame == 0) {
                     enemy.active = false;
-                    score += SCORE_PER_KILL * (combo + 1); // Tăng điểm với combo
+                    score += SCORE_PER_KILL * (combo + 1);
                     combo++;
-                    comboTime = COMBO_TIMEOUT; // Reset thời gian combo
-                    upgradePoints += 1; // Tăng điểm nâng cấp
-                    spawnPowerUp(enemy.rect.x, enemy.rect.y); // Sinh power-up
+                    comboTime = COMBO_TIMEOUT;
+                    upgradePoints += 1;
+                    spawnPowerUp(enemy.rect.x, enemy.rect.y);
                 }
             }
         }
@@ -454,10 +541,10 @@ void update(float deltaTime) {
         }
         enemy.updateHitbox();
 
-        if (length < 50.0f && enemy.state != GameObject::DYING) {
-            enemy.state = GameObject::SLASHING;
-        } else if (enemy.state != GameObject::DYING) {
-            enemy.state = GameObject::WALKING;
+        if (length < 50.0f && enemy.enemyState != DYING) {
+            enemy.enemyState = SLASHING;
+        } else if (enemy.enemyState != DYING) {
+            enemy.enemyState = WALKING;
         }
     }
 
@@ -475,15 +562,16 @@ void update(float deltaTime) {
     for (auto& proj : projectiles) {
         if (!proj.active) continue;
         for (auto& enemy : enemies) {
-            if (!enemy.active || enemy.state == GameObject::DYING) continue;
+            if (!enemy.active || enemy.enemyState == DYING) continue;
             if (checkCollision(proj.hitbox, enemy.hitbox)) {
                 proj.active = false;
                 enemy.health -= projectileDamage;
                 qReady = true;
                 qCooldown = 0;
-                if (enemy.health <= 0 && enemy.state != GameObject::DYING) {
-                    enemy.state = GameObject::DYING;
-                    enemy.vx = 0; enemy.vy = 0;
+                if (enemy.health <= 0 && enemy.enemyState != DYING) {
+                    enemy.enemyState = DYING;
+                    enemy.vx = 0;
+                    enemy.vy = 0;
                 }
                 break;
             }
@@ -493,14 +581,16 @@ void update(float deltaTime) {
     static float lastDamageTime = 0.0f;
     if (!shieldActive) {
         for (auto& enemy : enemies) {
-            if (!enemy.active || enemy.state != GameObject::SLASHING) continue;
+            if (!enemy.active || enemy.enemyState != SLASHING) continue;
             if (checkCollision(player.hitbox, enemy.hitbox) && gameTime - lastDamageTime >= 0.5f) {
                 playerHealth -= 20;
                 lastDamageTime = gameTime;
+                if (playerHealth > 0 && player.playerState != DEAD) {
+                    player.playerState = HURT;
+                    player.animTime = 0.0f;
+                }
                 if (playerHealth <= 0) {
-                    std::cout << "Game Over! Score: " << score << std::endl;
-                    SDL_Quit();
-                    exit(0);
+                    player.playerState = DEAD;
                 }
             }
         }
@@ -544,6 +634,10 @@ void update(float deltaTime) {
             qReady = true;
             qCooldown = 0;
         }
+        if (player.playerState != HURT && player.playerState != DEAD) {
+            player.playerState = ATTACK;
+            player.animTime = 0.0f;
+        }
     }
 
     enemies.erase(std::remove_if(enemies.begin(), enemies.end(),
@@ -560,7 +654,19 @@ void render() {
         SDL_RenderCopy(renderer, backgroundTexture, nullptr, nullptr);
     }
 
-    SDL_RenderCopyF(renderer, playerTexture, nullptr, &player.rect);
+    Animation* currentPlayerAnim = nullptr;
+    switch (player.playerState) {
+        case IDLE: currentPlayerAnim = &playerAnim.idle; break;
+        case WALK: currentPlayerAnim = &playerAnim.walk; break;
+        case RUN: currentPlayerAnim = &playerAnim.run; break;
+        case ATTACK: currentPlayerAnim = &playerAnim.attack; break;
+        case HURT: currentPlayerAnim = &playerAnim.hurt; break;
+        case DEAD: currentPlayerAnim = &playerAnim.dead; break;
+    }
+    if (currentPlayerAnim && !currentPlayerAnim->frames.empty()) {
+        SDL_RenderCopyF(renderer, currentPlayerAnim->texture,
+                        &currentPlayerAnim->frames[currentPlayerAnim->currentFrame], &player.rect);
+    }
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 0, 100);
     for (const auto& marker : markers) {
@@ -573,23 +679,24 @@ void render() {
         Animation* currentAnim = nullptr;
         switch (enemy.type) {
             case BASIC:
-                if (enemy.state == GameObject::WALKING) currentAnim = &enemyBasicAnim.walking;
-                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyBasicAnim.slashing;
-                else if (enemy.state == GameObject::DYING) currentAnim = &enemyBasicAnim.dying;
+                if (enemy.enemyState == WALKING) currentAnim = &enemyBasicAnim.walking;
+                else if (enemy.enemyState == SLASHING) currentAnim = &enemyBasicAnim.slashing;
+                else if (enemy.enemyState == DYING) currentAnim = &enemyBasicAnim.dying;
                 break;
             case FAST:
-                if (enemy.state == GameObject::WALKING) currentAnim = &enemyFastAnim.walking;
-                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyFastAnim.slashing;
-                else if (enemy.state == GameObject::DYING) currentAnim = &enemyFastAnim.dying;
+                if (enemy.enemyState == WALKING) currentAnim = &enemyFastAnim.walking;
+                else if (enemy.enemyState == SLASHING) currentAnim = &enemyFastAnim.slashing;
+                else if (enemy.enemyState == DYING) currentAnim = &enemyFastAnim.dying;
                 break;
             case CHASER:
-                if (enemy.state == GameObject::WALKING) currentAnim = &enemyChaserAnim.walking;
-                else if (enemy.state == GameObject::SLASHING) currentAnim = &enemyChaserAnim.slashing;
-                else if (enemy.state == GameObject::DYING) currentAnim = &enemyChaserAnim.dying;
+                if (enemy.enemyState == WALKING) currentAnim = &enemyChaserAnim.walking;
+                else if (enemy.enemyState == SLASHING) currentAnim = &enemyChaserAnim.slashing;
+                else if (enemy.enemyState == DYING) currentAnim = &enemyChaserAnim.dying;
                 break;
         }
         if (currentAnim && !currentAnim->frames.empty()) {
-            SDL_RenderCopyF(renderer, currentAnim->frames[currentAnim->currentFrame], nullptr, &enemy.rect);
+            SDL_RenderCopyF(renderer, currentAnim->texture,
+                            &currentAnim->frames[currentAnim->currentFrame], &enemy.rect);
         }
     }
 
@@ -641,7 +748,7 @@ void render() {
     renderText("Shield: " + std::string(shieldActive ? "Active" : "Inactive") + " (" +
                std::to_string(static_cast<int>(shieldTimer)) + "s)", 10, 220, {255, 255, 255});
     renderText("Weapon: " + std::string(currentWeapon == SINGLE ? "Single" : "Shotgun"), 10, 250);
-    renderText("Combo: " + std::to_string(combo), 10, 280); // Hiển thị combo
+    renderText("Combo: " + std::to_string(combo), 10, 280);
 
     const int barWidth = 200;
     const int barHeight = 15;
@@ -663,16 +770,22 @@ void render() {
 }
 
 void clean() {
-    SDL_DestroyTexture(playerTexture);
-    for (auto& frame : enemyBasicAnim.walking.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyBasicAnim.slashing.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyBasicAnim.dying.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyFastAnim.walking.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyFastAnim.slashing.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyFastAnim.dying.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyChaserAnim.walking.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyChaserAnim.slashing.frames) SDL_DestroyTexture(frame);
-    for (auto& frame : enemyChaserAnim.dying.frames) SDL_DestroyTexture(frame);
+    SDL_DestroyTexture(playerAnim.idle.texture);
+    SDL_DestroyTexture(playerAnim.walk.texture);
+    SDL_DestroyTexture(playerAnim.run.texture);
+    SDL_DestroyTexture(playerAnim.attack.texture);
+    SDL_DestroyTexture(playerAnim.hurt.texture);
+    SDL_DestroyTexture(playerAnim.dead.texture);
+
+    SDL_DestroyTexture(enemyBasicAnim.walking.texture);
+    SDL_DestroyTexture(enemyBasicAnim.slashing.texture);
+    SDL_DestroyTexture(enemyBasicAnim.dying.texture);
+    SDL_DestroyTexture(enemyFastAnim.walking.texture);
+    SDL_DestroyTexture(enemyFastAnim.slashing.texture);
+    SDL_DestroyTexture(enemyFastAnim.dying.texture);
+    SDL_DestroyTexture(enemyChaserAnim.walking.texture);
+    SDL_DestroyTexture(enemyChaserAnim.slashing.texture);
+    SDL_DestroyTexture(enemyChaserAnim.dying.texture);
     SDL_DestroyTexture(projectileTexture);
     SDL_DestroyTexture(speedBoostTexture);
     SDL_DestroyTexture(damageBoostTexture);
@@ -694,6 +807,9 @@ int main(int argc, char* argv[]) {
     player.rect = {SCREEN_WIDTH / 2.0f - PLAYER_SIZE / 2.0f, SCREEN_HEIGHT / 2.0f - PLAYER_SIZE / 2.0f, PLAYER_SIZE, PLAYER_SIZE};
     player.updateHitbox();
     player.active = true;
+    player.health = MAX_HEALTH;
+    player.playerState = IDLE;
+    player.animTime = 0.0f;
 
     Uint32 lastTime = SDL_GetTicks();
     bool running = true;

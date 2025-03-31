@@ -129,7 +129,7 @@ Trong "Dodge And Q", bạn sẽ:
 + Ý nghĩa: Điều chỉnh độ khó động dựa trên tiến trình game.
 
 
-8. Tổng kết
+9. Tổng kết
 - Tính toán thời gian thực: Sử dụng deltaTime để đồng bộ hóa chuyển động và hoạt ảnh.
 - Quản lý danh sách động: Vector cho kẻ thù, đạn, particle, với xóa phần tử không hoạt động bằng erase-remove idiom.
 - Hành vi AI đơn giản: Kẻ thù bám đuổi hoặc tấn công dựa trên khoảng cách.

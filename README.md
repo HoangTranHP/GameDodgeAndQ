@@ -53,6 +53,14 @@ Trong "Dodge And Q", bạn sẽ:
 - Playing game
 ![image](https://github.com/user-attachments/assets/6f134693-7492-42af-855a-3d4c07a1e57d)
 
+- Level up notification
+![image](https://github.com/user-attachments/assets/85614033-9f4f-4822-89a6-af8120627546)
+
+
+- Upgrade menu
+![image](https://github.com/user-attachments/assets/fd4e0d06-435b-421d-9e18-834f8447dfd4)
+
+
 - Game over menu
 ![image](https://github.com/user-attachments/assets/41a07610-05de-4282-adc5-da6d955a3a98)
 
